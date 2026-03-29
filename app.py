@@ -15,8 +15,7 @@ url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message
     }
-    r = requests.post(url, json=payload, timeout=20)
-    print("Telegram:", r.status_code, r.text)
+    requests.post(url, json=payload, timeout=20)
 
 
 @app.route("/")
@@ -27,7 +26,6 @@ def home():
 @app.route("/alert", methods=["POST"])
 def alert():
     data = request.get_json(silent=True) or {}
-    print("ALERT:", data)
 
     signal = str(data.get("signal", "")).upper()
     ticker = str(data.get("ticker", "UNBEKANNT"))
@@ -36,17 +34,9 @@ def alert():
     volume = str(data.get("volume", ""))
 
     prompt = f"""
-Du bist ein strenger Trading-Filter für US-Aktien.
+Antworte nur mit:
+A-LONG, A-SHORT, B-LONG, B-SHORT oder NO-TRADE
 
-Regeln:
-- Antworte NUR mit genau einem dieser Werte:
-A-LONG
-A-SHORT
-B-LONG
-B-SHORT
-NO-TRADE
-
-Signal-Daten:
 Ticker: {ticker}
 Signal: {signal}
 Trigger: {trigger}
@@ -55,7 +45,6 @@ Volume: {volume}
 """
 
     api_key = os.getenv("OPENAI_API_KEY")
-    print("OPENAI KEY vorhanden:", bool(api_key))
 
     if not api_key:
         decision = "NO-TRADE"
@@ -68,23 +57,14 @@ Volume: {volume}
             )
             decision = (response.output_text or "").strip().upper()
         except Exception as e:
-            print("OpenAI Fehler:", e)
+            print("Fehler:", e)
             decision = "NO-TRADE"
 
-    print("Decision:", decision)
-
-    message = (
-        f"{decision}\n"
-        f"{ticker}\n"
-        f"{trigger}\n"
-        f"VWAP: {vwap}\n"
-        f"Volume: {volume}"
-    )
-
+    message = f"{decision}\n{ticker}\n{trigger}\nVWAP: {vwap}\nVolume: {volume}"
     send_telegram_message(message)
+
     return "OK", 200
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=8080)
