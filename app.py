@@ -1,6 +1,6 @@
 import os
-import threading
 import requests
+import threading
 from flask import Flask, request, jsonify
 from openai import OpenAI
 
@@ -16,22 +16,22 @@ def send_telegram_message(message: str) -> None:
         print("Telegram ENV fehlt.")
         return
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
-    "chat_id": TELEGRAM_CHAT_ID,
-    "text": message
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
     }
 
-try:
-    response = requests.post(url, json=payload, timeout=10)
-    print("Telegram:", response.status_code, response.text)
-except Exception as e:
-    print("Telegram Fehler:", e)
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        print("Telegram:", response.status_code, response.text)
+    except Exception as e:
+        print("Telegram Fehler:", e)
 
 
 def process_alert(data: dict) -> None:
-    signal = str(data.get("signal", "UNBEKANNT")).upper()
-    ticker = str(data.get("ticker", "UNBEKANNT")).upper()
+    ticker = str(data.get("ticker", ""))
+    signal = str(data.get("signal", ""))
     trigger = str(data.get("trigger", ""))
     entry = str(data.get("entry", ""))
     stop = str(data.get("stop", ""))
@@ -49,11 +49,11 @@ def process_alert(data: dict) -> None:
     decision = "NO-TRADE"
     reason = "Kein Urteil"
 
-if OPENAI_API_KEY:
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+    if OPENAI_API_KEY:
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
 
-        prompt = f"""
+            prompt = f"""
 Du bist ein strenger Daytrading-Filter für US-Aktien.
 
 Bewerte das Signal nur mit einem dieser Urteile:
@@ -83,18 +83,18 @@ OR High: {or_high}
 OR Low: {or_low}
 """
 
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt
-        )
+            response = client.responses.create(
+                model="gpt-4.1-mini",
+                input=prompt
+            )
 
-        output = (response.output_text or "").strip()
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
+            output = (response.output_text or "").strip()
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
 
-        if lines:
-            decision = lines[0].upper()
-            if len(lines) > 1:
-                reason = lines[1]
+            if lines:
+                decision = lines[0].upper()
+                if len(lines) > 1:
+                    reason = lines[1]
 
         except Exception as e:
             print("OpenAI Fehler:", e)
