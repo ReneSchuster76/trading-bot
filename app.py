@@ -91,10 +91,10 @@ OR Low: {or_low}
         output = (response.output_text or "").strip()
         lines = [line.strip() for line in output.splitlines() if line.strip()]
 
-            if lines:
-                decision = lines[0].upper()
-                if len(lines) > 1:
-                    reason = lines[1]
+        if lines:
+            decision = lines[0].upper()
+            if len(lines) > 1:
+                reason = lines[1]
 
         except Exception as e:
             print("OpenAI Fehler:", e)
