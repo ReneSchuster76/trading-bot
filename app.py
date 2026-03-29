@@ -22,10 +22,10 @@ def send_telegram_message(message: str) -> None:
     "text": message
     }
 
-    try:
+try:
     response = requests.post(url, json=payload, timeout=10)
     print("Telegram:", response.status_code, response.text)
-    except Exception as e:
+except Exception as e:
     print("Telegram Fehler:", e)
 
 
@@ -49,11 +49,11 @@ def process_alert(data: dict) -> None:
     decision = "NO-TRADE"
     reason = "Kein Urteil"
 
-    if OPENAI_API_KEY:
-        try:
-            client = OpenAI(api_key=OPENAI_API_KEY)
+if OPENAI_API_KEY:
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
 
-            prompt = f"""
+        prompt = f"""
 Du bist ein strenger Daytrading-Filter für US-Aktien.
 
 Bewerte das Signal nur mit einem dieser Urteile:
@@ -93,8 +93,8 @@ OR Low: {or_low}
 
             if lines:
                 decision = lines[0].upper()
-            if len(lines) > 1:
-                reason = lines[1]
+                if len(lines) > 1:
+                    reason = lines[1]
 
         except Exception as e:
             print("OpenAI Fehler:", e)
