@@ -16,16 +16,16 @@ def send_telegram_message(message: str) -> None:
         print("Telegram ENV fehlt.")
         return
 
-url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-payload = {
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
     "chat_id": TELEGRAM_CHAT_ID,
     "text": message
-}
+    }
 
-try:
+    try:
     response = requests.post(url, json=payload, timeout=10)
     print("Telegram:", response.status_code, response.text)
-except Exception as e:
+    except Exception as e:
     print("Telegram Fehler:", e)
 
 
