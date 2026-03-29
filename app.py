@@ -1,102 +1,150 @@
 import os
 import threading
 import requests
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from openai import OpenAI
 
 app = Flask(__name__)
 
-# ENV Variablen
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
-def send_telegram_message(message: str):
+def send_telegram_message(message: str) -> None:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram ENV fehlt")
+        print("Telegram ENV fehlt.")
         return
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message
-    }
+url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+payload = {
+    "chat_id": TELEGRAM_CHAT_ID,
+    "text": message
+}
 
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print("Telegram Fehler:", e)
-
-
-@app.route("/")
-def home():
-    return "Bot läuft!", 200
+try:
+    response = requests.post(url, json=payload, timeout=10)
+    print("Telegram:", response.status_code, response.text)
+except Exception as e:
+    print("Telegram Fehler:", e)
 
 
-def process_alert(data):
-    signal = str(data.get("signal", "")).upper()
+def process_alert(data: dict) -> None:
+    signal = str(data.get("signal", "UNBEKANNT")).upper()
     ticker = str(data.get("ticker", "UNBEKANNT")).upper()
     trigger = str(data.get("trigger", ""))
+    entry = str(data.get("entry", ""))
+    stop = str(data.get("stop", ""))
+    take = str(data.get("take", ""))
+    rr = str(data.get("rr", ""))
     vwap = str(data.get("vwap", ""))
     volume = str(data.get("volume", ""))
+    pm_high = str(data.get("pmHigh", ""))
+    pm_low = str(data.get("pmLow", ""))
+    or_high = str(data.get("orHigh", ""))
+    or_low = str(data.get("orLow", ""))
 
     print("ALERT DATA:", data)
 
-    prompt = f"""
-Du bist ein strenger Trading-Filter für US-Aktien.
+    decision = "NO-TRADE"
+    reason = "Kein Urteil"
 
-Regeln:
-Antworte NUR mit genau einem dieser Werte:
+    if OPENAI_API_KEY:
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+
+            prompt = f"""
+Du bist ein strenger Daytrading-Filter für US-Aktien.
+
+Bewerte das Signal nur mit einem dieser Urteile:
 A-LONG
 A-SHORT
 B-LONG
 B-SHORT
 NO-TRADE
 
+Antworte in genau 2 Zeilen:
+Zeile 1: nur das Urteil
+Zeile 2: kurze Begründung auf Deutsch
+
 Daten:
-Ticker: {ticker}
 Signal: {signal}
+Ticker: {ticker}
 Trigger: {trigger}
+Entry: {entry}
+Stop: {stop}
+Take: {take}
+RR: {rr}
 VWAP: {vwap}
 Volume: {volume}
+PM High: {pm_high}
+PM Low: {pm_low}
+OR High: {or_high}
+OR Low: {or_low}
 """
 
-    decision = "NO-TRADE"
-
-    if OPENAI_API_KEY:
-        try:
-            client = OpenAI(api_key=OPENAI_API_KEY)
             response = client.responses.create(
                 model="gpt-4.1-mini",
                 input=prompt
             )
-            decision = (response.output_text or "").strip().upper()
+
+            output = (response.output_text or "").strip()
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+
+            if lines:
+                decision = lines[0].upper()
+            if len(lines) > 1:
+                reason = lines[1]
+
         except Exception as e:
             print("OpenAI Fehler:", e)
             decision = "NO-TRADE"
+            reason = "OpenAI Fehler"
+
+    emoji = "⚪"
+    if "LONG" in decision:
+        emoji = "🟢"
+    elif "SHORT" in decision:
+        emoji = "🔴"
 
     message = (
-        f"{decision}\n"
-        f"{ticker}\n"
-        f"{trigger}\n"
+        f"{emoji} {decision}\n"
+        f"Ticker: {ticker}\n"
+        f"Trigger: {trigger}\n"
+        f"Entry: {entry}\n"
+        f"Stop: {stop}\n"
+        f"Take: {take}\n"
+        f"RR: {rr}\n"
         f"VWAP: {vwap}\n"
-        f"Volume: {volume}"
+        f"Volume: {volume}\n"
+        f"PM High: {pm_high}\n"
+        f"PM Low: {pm_low}\n"
+        f"OR High: {or_high}\n"
+        f"OR Low: {or_low}\n"
+        f"Grund: {reason}"
     )
 
     send_telegram_message(message)
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot läuft!", 200
 
 
 @app.route("/alert", methods=["POST"])
 def alert():
     data = request.get_json(silent=True) or {}
 
-    # sofort im Hintergrund verarbeiten
-    threading.Thread(target=process_alert, args=(data,), daemon=True).start()
+    threading.Thread(
+        target=process_alert,
+        args=(data,),
+        daemon=True
+    ).start()
 
-    # sofort an TradingView antworten
-    return {"status": "ok"}, 200
+    return jsonify({"status": "ok"}), 200
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
