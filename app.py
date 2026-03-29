@@ -83,13 +83,13 @@ OR High: {or_high}
 OR Low: {or_low}
 """
 
-            response = client.responses.create(
-                model="gpt-4.1-mini",
-                input=prompt
-            )
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt
+        )
 
-            output = (response.output_text or "").strip()
-            lines = [line.strip() for line in output.splitlines() if line.strip()]
+        output = (response.output_text or "").strip()
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
 
             if lines:
                 decision = lines[0].upper()
