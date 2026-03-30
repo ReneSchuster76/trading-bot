@@ -14,17 +14,23 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 last_trade_time = {}
 COOLDOWN_MINUTES = 10
+DEBUG = True
+
+
+def log(*args):
+    if DEBUG:
+        print(*args)
 
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram fehlt")
-        return
+        return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
     try:
-        requests.post(
+        r = requests.post(
             url,
             json={
                 "chat_id": TELEGRAM_CHAT_ID,
@@ -32,8 +38,12 @@ def send_telegram(message):
             },
             timeout=10,
         )
+        log("Telegram Status:", r.status_code)
+        log("Telegram Antwort:", r.text)
+        return r.status_code == 200
     except Exception as e:
         print("Telegram Fehler:", e)
+        return False
 
 
 def safe_float(x):
@@ -116,6 +126,27 @@ def calculate_ko(entry, stop, signal):
     return round(ko, 2), round(leverage, 1)
 
 
+def send_debug_telegram(data, ticker, signal, trigger, entry, stop, take, rr, reason):
+    msg = f"""🧪 DEBUG ALERT
+
+Ticker: {ticker}
+Signal: {signal}
+Trigger: {trigger}
+
+Entry: {entry}
+Stop: {stop}
+Take: {take}
+RR: {rr}
+
+Grund:
+{reason}
+
+Payload:
+{data}
+"""
+    send_telegram(msg)
+
+
 def process_alert(data):
     ticker = str(data.get("ticker", "")).upper().strip()
     signal = str(data.get("signal", "")).upper().strip()
@@ -132,7 +163,9 @@ def process_alert(data):
     or_high = data.get("orHigh")
     or_low = data.get("orLow")
 
-    print("DATA:", data)
+    log("====================================")
+    log("ALERT EMPFANGEN")
+    log("DATA:", data)
 
     decision = "NO-TRADE"
     reason = "Filter"
@@ -148,47 +181,69 @@ def process_alert(data):
     or_high_f = safe_float(or_high)
     or_low_f = safe_float(or_low)
 
+    log(f"Ticker={ticker} | Signal={signal} | Trigger={trigger}")
+    log(f"Entry={entry} | Stop={stop} | Take={take} | RR={rr}")
+    log(f"Session={session} | VWAP={vwap} | Volume={volume}")
+
     # Nur NVDA
     if ticker != "NVDA":
+        reason = f"Nicht NVDA: {ticker}"
+        log(reason)
         return
 
     # Cooldown
     if in_cooldown(ticker):
-        print("Cooldown aktiv – Signal ignoriert")
+        reason = "Cooldown aktiv – Signal ignoriert"
+        log(reason)
+        return
+
+    # Debug-Fallback für Testsignale mit unvollständigen Daten
+    if trigger.upper() == "TEST" and (not entry or not stop or not take):
+        reason = "TEST Alert ohne vollständige Daten"
+        log(reason)
+        send_debug_telegram(data, ticker, signal, trigger, entry, stop, take, rr, reason)
         return
 
     # Hard Filters
     if not entry or not stop or not take:
         reason = "Fehlende Daten"
+        log(reason)
         return
 
     if rr_f is None or rr_f < 1.8:
         reason = "RR zu klein für NVDA PRO"
+        log(reason)
         return
 
     if session == "BLOCKED":
         reason = "Zeitfenster blockiert"
+        log(reason)
         return
 
     if session == "OFF_HOURS":
         reason = "Außerhalb Handelszeit"
+        log(reason)
         return
 
     if volume_f is not None and volume_f < 300000:
         reason = "Volumen zu schwach"
+        log(reason)
         return
 
     if signal not in {"LONG", "SHORT"}:
         reason = "Ungültiges Signal"
+        log(reason)
         return
 
     # VWAP-Richtung
     if signal == "LONG" and vwap_f is not None and entry_f is not None and entry_f < vwap_f:
         reason = "LONG unter VWAP"
+        log(reason)
         return
 
     if signal == "SHORT" and vwap_f is not None and entry_f is not None and entry_f > vwap_f:
         reason = "SHORT über VWAP"
+        log(reason)
         return
 
     # einfacher Chop-/Range-Filter
@@ -200,6 +255,7 @@ def process_alert(data):
         and trigger.lower() in {"", "test", "signal"}
     ):
         reason = "Zu wenig Kontext in PM-Range"
+        log(reason)
         return
 
     # Entry zu spät / Stop zu weit
@@ -207,6 +263,7 @@ def process_alert(data):
         dist = abs(entry_f - stop_f) / entry_f
         if dist > 0.03:
             reason = "Entry zu spät / Stop zu weit"
+            log(reason)
             return
 
     # OR optional als Zusatzkontext, kein harter Filter
@@ -266,22 +323,31 @@ Session: {session}
                 if len(out) > 1:
                     reason = out[1].strip()
 
+            log("AI Entscheidung:", decision)
+            log("AI Grund:", reason)
+
         except Exception as e:
             print("OpenAI Fehler:", e)
-            reason = "AI Fehler"
+            reason = f"AI Fehler: {e}"
             return
     else:
         reason = "OPENAI_API_KEY fehlt"
+        log(reason)
         return
 
     lev = evaluate_leverage(decision, entry, stop, rr)
     ko, lev_est = calculate_ko(entry, stop, signal)
 
+    log(f"Leverage Bewertung: {lev}")
+    log(f"KO: {ko} | Hebel ca: {lev_est}")
+
     # Nur A-Setups mit passendem Hebel
     if not decision.startswith("A-"):
+        log("Kein A-Setup -> kein Telegram")
         return
 
     if lev not in {"GEEIGNET", "OK"}:
+        log("Hebel-Bewertung nicht passend -> kein Telegram")
         return
 
     last_trade_time[ticker] = datetime.now()
@@ -324,6 +390,9 @@ def home():
 def alert():
     data = request.get_json(silent=True) or {}
 
+    log("POST /alert empfangen")
+    log("JSON:", data)
+
     threading.Thread(
         target=process_alert,
         args=(data,),
@@ -334,4 +403,5 @@ def alert():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
