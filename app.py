@@ -11,117 +11,156 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
-def send_telegram_message(message: str) -> None:
+def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram ENV fehlt.")
+        print("Telegram fehlt")
         return
 
-url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-    }
+        "text": message
+    })
 
+
+def safe_float(x):
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        print("Telegram:", response.status_code, response.text)
-    except Exception as e:
-        print("Telegram Fehler:", e)
+        return float(x)
+    except:
+        return None
 
 
-def process_alert(data: dict) -> None:
-    ticker = str(data.get("ticker", ""))
-    signal = str(data.get("signal", ""))
-    trigger = str(data.get("trigger", ""))
-    entry = str(data.get("entry", ""))
-    stop = str(data.get("stop", ""))
-    take = str(data.get("take", ""))
-    rr = str(data.get("rr", ""))
-    vwap = str(data.get("vwap", ""))
-    volume = str(data.get("volume", ""))
-    pm_high = str(data.get("pmHigh", ""))
-    pm_low = str(data.get("pmLow", ""))
-    or_high = str(data.get("orHigh", ""))
-    or_low = str(data.get("orLow", ""))
+def evaluate_leverage(decision, entry, stop, rr):
+    entry = safe_float(entry)
+    stop = safe_float(stop)
+    rr = safe_float(rr)
 
-    print("ALERT DATA:", data)
+    if not entry or not stop or not rr:
+        return "UNBEKANNT"
+
+    dist = abs(entry - stop) / entry
+
+    if decision.startswith("A-") and rr >= 1.8:
+        if dist < 0.015:
+            return "GEEIGNET"
+        elif dist < 0.025:
+            return "OK"
+        else:
+            return "ZU WEIT"
+
+    return "NICHT"
+
+
+def calculate_ko(entry, stop, signal):
+    entry = safe_float(entry)
+    stop = safe_float(stop)
+
+    if not entry or not stop:
+        return None, None
+
+    if signal == "LONG":
+        ko = stop * 0.996
+        dist = entry - ko
+    elif signal == "SHORT":
+        ko = stop * 1.004
+        dist = ko - entry
+    else:
+        return None, None
+
+    if dist <= 0:
+        return None, None
+
+    leverage = entry / dist
+    return round(ko, 2), round(leverage, 1)
+
+
+def process_alert(data):
+    ticker = str(data.get("ticker", "")).upper()
+    signal = str(data.get("signal", "")).upper()
+    entry = data.get("entry")
+    stop = data.get("stop")
+    take = data.get("take")
+    rr = data.get("rr")
+    volume = data.get("volume")
+
+    print("DATA:", data)
 
     decision = "NO-TRADE"
-    reason = "Kein Urteil"
+    reason = "Filter"
 
-    # 🔹 Hard Filter (Profi)
-    if not ticker or not entry or not stop or not take:
-        reason = "Unvollständige Daten"
-    elif float(rr or 0) < 1.5:
-        reason = "RR zu schlecht"
-    elif ticker.endswith("USD"):
-        reason = "Keine US-Aktie"
+    # Hard Filter
+    if not ticker or not entry or not stop:
+        reason = "Fehlende Daten"
+
+    elif safe_float(rr) and safe_float(rr) < 1.5:
+        reason = "RR zu klein"
 
     elif OPENAI_API_KEY:
         try:
             client = OpenAI(api_key=OPENAI_API_KEY)
 
             prompt = f"""
-Du bist ein strenger Daytrading-Filter für US-Aktien.
+Du bist ein strenger Daytrader.
 
-Bewerte das Signal nur mit:
+Antworte nur:
 A-LONG, A-SHORT, B-LONG, B-SHORT oder NO-TRADE
 
-Antworte in genau 2 Zeilen:
-1. Urteil
-2. kurze Begründung
+Dann kurze Begründung.
 
-Daten:
-Signal: {signal}
 Ticker: {ticker}
+Signal: {signal}
 Entry: {entry}
 Stop: {stop}
 Take: {take}
 RR: {rr}
-VWAP: {vwap}
 Volume: {volume}
-PM High: {pm_high}
-PM Low: {pm_low}
-OR High: {or_high}
-OR Low: {or_low}
-""".strip()
+"""
 
-            response = client.responses.create(
+            res = client.responses.create(
                 model="gpt-4.1-mini",
-                input=prompt,
+                input=prompt
             )
 
-            output = (response.output_text or "").strip()
-            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            out = res.output_text.strip().split("\n")
 
-            if lines:
-                decision = lines[0].upper()
-                if len(lines) > 1:
-                    reason = lines[1]
+            if out:
+                decision = out[0].strip().upper()
+                if len(out) > 1:
+                    reason = out[1]
 
         except Exception as e:
-            print("OpenAI Fehler:", e)
-            reason = f"OpenAI Fehler: {e}"
+            print(e)
+            reason = "AI Fehler"
 
-    # Emoji
+    lev = evaluate_leverage(decision, entry, stop, rr)
+    ko, lev_est = calculate_ko(entry, stop, signal)
+
     emoji = "⚪"
     if "LONG" in decision:
         emoji = "🟢"
     elif "SHORT" in decision:
         emoji = "🔴"
 
-    message = (
-        f"{emoji} {decision}\n"
-        f"{ticker} | RR {rr}\n"
-        f"Entry: {entry} | Stop: {stop} | Take: {take}\n"
-        f"VWAP: {vwap} | Vol: {volume}\n"
-        f"Grund: {reason}"
-    )
+    msg = f"""{emoji} {decision} | {ticker}
 
-    send_telegram_message(message)
+Entry: {entry}
+Stop: {stop}
+Take: {take}
+RR: {rr}
+
+Hebel 12-15x: {lev}
+
+KO: {ko}
+Hebel ca: {lev_est}x
+
+Grund:
+{reason}
+"""
+
+    send_telegram(msg)
 
 
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
     return "Bot läuft!", 200
 
@@ -133,12 +172,11 @@ def alert():
     threading.Thread(
         target=process_alert,
         args=(data,),
-        daemon=True,
+        daemon=True
     ).start()
 
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=8080)
