@@ -149,8 +149,8 @@ def process_alert(data):
     or_low_f = safe_float(or_low)
 
     # Nur NVDA
-    if ticker != "NVDA":
-        return
+    # if ticker != "NVDA":
+    #    return
 
     # Cooldown
     if in_cooldown(ticker):
