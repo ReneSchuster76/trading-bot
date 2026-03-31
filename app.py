@@ -12,9 +12,9 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-MIN_RR = 1.8
-COOLDOWN_SECONDS = 300
-DEBUG = True
+MIN_RR = float(os.getenv("MIN_RR", 2.0))
+COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", 300))
+DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 
 last_signal_time = {}
 
@@ -175,195 +175,69 @@ def alert():
 
         log(f"Signal={signal} | Ticker={ticker} | Setup={setup_type}")
         log(f"Entry={entry} Stop={stop} Take={take} RR={rr}")
-        log(
-            f"Session={session_label} | Volumen={volume_status} | "
-            f"VWAP={vwap_position} | Qualität={quality_grade}"
-        )
 
-        # =========================
         # COOL DOWN
-        # =========================
         if in_cooldown(ticker):
             log("⛔ Cooldown aktiv")
             return jsonify({"status": "cooldown"}), 200
 
-        # =========================
-        # DEBUG FALLBACK
-        # =========================
+        # DEBUG
         if entry is None or stop is None or take is None:
-            log("⚠️ FEHLENDE DATEN → DEBUG TELEGRAM")
-
             msg = build_debug_message(
-                ticker=ticker,
-                signal=signal,
-                trigger=trigger,
-                setup_type=setup_type,
-                entry=entry,
-                stop=stop,
-                take=take,
-                rr=rr
+                ticker, signal, trigger, setup_type,
+                entry, stop, take, rr
             )
-
             send_telegram_message(msg)
             return jsonify({"status": "debug_sent"}), 200
 
-        # =========================
-        # GRUNDVALIDIERUNG
-        # =========================
-        if signal not in ["LONG", "SHORT"]:
-            log("⛔ Ungültiges Signal")
-
-            msg = build_no_trade_message(
-                ticker=ticker,
-                signal=signal,
-                setup_type=setup_type,
-                reason="Ungültiges Signal",
-                rr=rr,
-                quality=quality_grade
-            )
-            send_telegram_message(msg)
-
-            return jsonify({"status": "invalid_signal"}), 200
-
-        # =========================
         # RR CHECK
-        # =========================
         if rr is None or rr < MIN_RR:
-            log("⛔ RR zu klein")
-
             msg = build_no_trade_message(
-                ticker=ticker,
-                signal=signal,
-                setup_type=setup_type,
-                reason=f"RR zu klein ({rr})" if rr is not None else "RR fehlt",
-                rr=rr,
-                quality=quality_grade
+                ticker, signal, setup_type,
+                f"RR zu klein ({rr})", rr, quality_grade
             )
             send_telegram_message(msg)
-
             return jsonify({"status": "rr_fail"}), 200
 
-        # =========================
-        # LONG / SHORT VALIDIERUNG
-        # =========================
-        if signal == "LONG":
-            if stop >= entry:
-                log("⛔ LONG ungültig: stop >= entry")
+        # VALIDIERUNG
+        if signal == "LONG" and stop >= entry:
+            send_telegram_message(build_no_trade_message(ticker, signal, setup_type, "Stop falsch"))
+            return jsonify({"status": "invalid_long"}), 200
 
-                msg = build_no_trade_message(
-                    ticker=ticker,
-                    signal=signal,
-                    setup_type=setup_type,
-                    reason="LONG ungültig: Stop liegt nicht unter Entry",
-                    rr=rr,
-                    quality=quality_grade
-                )
-                send_telegram_message(msg)
+        if signal == "SHORT" and stop <= entry:
+            send_telegram_message(build_no_trade_message(ticker, signal, setup_type, "Stop falsch"))
+            return jsonify({"status": "invalid_short"}), 200
 
-                return jsonify({"status": "invalid_long"}), 200
-
-            if take <= entry:
-                log("⛔ LONG ungültig: take <= entry")
-
-                msg = build_no_trade_message(
-                    ticker=ticker,
-                    signal=signal,
-                    setup_type=setup_type,
-                    reason="LONG ungültig: Take liegt nicht über Entry",
-                    rr=rr,
-                    quality=quality_grade
-                )
-                send_telegram_message(msg)
-
-                return jsonify({"status": "invalid_long_take"}), 200
-
-        if signal == "SHORT":
-            if stop <= entry:
-                log("⛔ SHORT ungültig: stop <= entry")
-
-                msg = build_no_trade_message(
-                    ticker=ticker,
-                    signal=signal,
-                    setup_type=setup_type,
-                    reason="SHORT ungültig: Stop liegt nicht über Entry",
-                    rr=rr,
-                    quality=quality_grade
-                )
-                send_telegram_message(msg)
-
-                return jsonify({"status": "invalid_short"}), 200
-
-            if take >= entry:
-                log("⛔ SHORT ungültig: take >= entry")
-
-                msg = build_no_trade_message(
-                    ticker=ticker,
-                    signal=signal,
-                    setup_type=setup_type,
-                    reason="SHORT ungültig: Take liegt nicht unter Entry",
-                    rr=rr,
-                    quality=quality_grade
-                )
-                send_telegram_message(msg)
-
-                return jsonify({"status": "invalid_short_take"}), 200
-
-        # =========================
-        # RISIKO / QUALITÄT
-        # =========================
-        risk_reasons = []
-
+        # RISIKO
+        risks = []
         if quality_grade == "C":
-            risk_reasons.append("Qualität C")
-
+            risks.append("Qualität C")
         if volume_status.upper() == "LOW":
-            risk_reasons.append("Volumen niedrig")
-
+            risks.append("Volumen niedrig")
         if "OUTSIDE" in session_label.upper():
-            risk_reasons.append("außerhalb Prime Window")
+            risks.append("außerhalb Session")
 
-        if risk_reasons:
-            log("⚠️ Signal mit Risiko")
-
+        if risks:
             msg = build_risk_message(
-                ticker=ticker,
-                signal=signal,
-                setup_type=setup_type,
-                entry=entry,
-                stop=stop,
-                take=take,
-                rr=rr,
-                quality=quality_grade,
-                session_label=session_label,
-                volume_status=volume_status,
-                vwap_position=vwap_position,
-                reason=", ".join(risk_reasons)
+                ticker, signal, setup_type,
+                entry, stop, take, rr,
+                quality_grade, session_label,
+                volume_status, vwap_position,
+                ", ".join(risks)
             )
-
             send_telegram_message(msg)
             set_cooldown(ticker)
-
             return jsonify({"status": "risk_sent"}), 200
 
-        # =========================
-        # TELEGRAM SENDEN
-        # =========================
+        # NORMAL
         msg = build_signal_message(
-            ticker=ticker,
-            signal=signal,
-            setup_type=setup_type,
-            entry=entry,
-            stop=stop,
-            take=take,
-            rr=rr,
-            quality=quality_grade,
-            session_label=session_label,
-            volume_status=volume_status,
-            vwap_position=vwap_position
+            ticker, signal, setup_type,
+            entry, stop, take, rr,
+            quality_grade, session_label,
+            volume_status, vwap_position
         )
 
         send_telegram_message(msg)
-
         set_cooldown(ticker)
 
         return jsonify({"status": "sent"}), 200
