@@ -41,7 +41,7 @@ def safe_float(value):
         if value is None or value == "":
             return None
         return float(value)
-    except:
+    except Exception:
         return None
 
 
@@ -117,7 +117,7 @@ def get_earnings_label(ticker):
             "token": FINNHUB_API_KEY
         }
 
-        r = requests.get(url, params=params, timeout=4)
+        r = requests.get(url, params=params, timeout=2.5)
         data = r.json()
 
         log(f"📅 Finnhub Earnings Raw: {data}")
@@ -276,7 +276,8 @@ def alert():
         if rr is None or rr < MIN_RR:
             msg = build_no_trade_message(
                 ticker, signal, setup_type,
-                f"RR zu klein ({rr})", rr, quality_grade, earnings_label
+                f"RR zu klein ({rr})" if rr is not None else "RR fehlt",
+                rr, quality_grade, earnings_label
             )
             send_telegram_message(msg)
             return jsonify({"status": "rr_fail"}), 200
@@ -291,6 +292,15 @@ def alert():
             )
             return jsonify({"status": "invalid_long"}), 200
 
+        if signal == "LONG" and take <= entry:
+            send_telegram_message(
+                build_no_trade_message(
+                    ticker, signal, setup_type,
+                    "Take falsch", rr, quality_grade, earnings_label
+                )
+            )
+            return jsonify({"status": "invalid_long_take"}), 200
+
         if signal == "SHORT" and stop <= entry:
             send_telegram_message(
                 build_no_trade_message(
@@ -299,6 +309,30 @@ def alert():
                 )
             )
             return jsonify({"status": "invalid_short"}), 200
+
+        if signal == "SHORT" and take >= entry:
+            send_telegram_message(
+                build_no_trade_message(
+                    ticker, signal, setup_type,
+                    "Take falsch", rr, quality_grade, earnings_label
+                )
+            )
+            return jsonify({"status": "invalid_short_take"}), 200
+
+        # EARNINGS HARTER BLOCK
+        if earnings_label == "heute":
+            send_telegram_message(
+                build_no_trade_message(
+                    ticker=ticker,
+                    signal=signal,
+                    setup_type=setup_type,
+                    reason="Earnings heute",
+                    rr=rr,
+                    quality=quality_grade,
+                    earnings_label=earnings_label
+                )
+            )
+            return jsonify({"status": "earnings_today_block"}), 200
 
         # RISIKO
         risks = []
@@ -312,9 +346,7 @@ def alert():
         if "OUTSIDE" in session_label.upper():
             risks.append("außerhalb Session")
 
-        if earnings_label == "heute":
-            risks.append("Earnings heute")
-        elif earnings_label == "morgen":
+        if earnings_label == "morgen":
             risks.append("Earnings morgen")
 
         if risks:
@@ -326,8 +358,9 @@ def alert():
                 ", ".join(risks),
                 earnings_label
             )
-            send_telegram_message(msg)
-            set_cooldown(ticker)
+            sent = send_telegram_message(msg)
+            if sent:
+                set_cooldown(ticker)
             return jsonify({"status": "risk_sent"}), 200
 
         # NORMAL
@@ -339,8 +372,9 @@ def alert():
             earnings_label
         )
 
-        send_telegram_message(msg)
-        set_cooldown(ticker)
+        sent = send_telegram_message(msg)
+        if sent:
+            set_cooldown(ticker)
 
         return jsonify({"status": "sent"}), 200
 
